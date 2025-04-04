@@ -268,6 +268,9 @@ static void send_raw(int fd, char *buf, int buflen, int user, int cmd, struct qu
 	if (debug >= 2) {
 		fprintf(stderr, "TX-raw: client %s, cmd %d, %d bytes\n",
 			format_addr(&q->from, q->fromlen), cmd, len);
+
+		//simple test for seccomp - open will crash with -DD
+		//open("/dev/null", O_WRONLY);
 	}
 
 	sendto(fd, packet, len, 0, (struct sockaddr *) &q->from, q->fromlen);
@@ -2354,6 +2357,69 @@ static void prepare_dns_fd(int fd)
 #endif
 }
 
+#ifdef HAVE_SECCOMP
+#include <seccomp.h>
+
+/* Define macro to create syscall rules */
+#define ALLOW_SYSCALL(name) { SCMP_SYS(name), #name }
+
+/* Structure to hold syscall info */
+struct syscall_info {
+    int num;
+    const char *name;
+};
+
+/* Array of allowed syscalls */
+static const struct syscall_info allowed_syscalls[] = {
+    ALLOW_SYSCALL(brk),
+
+    ALLOW_SYSCALL(pselect6),
+    ALLOW_SYSCALL(read),
+    ALLOW_SYSCALL(recvmsg),
+    ALLOW_SYSCALL(write),
+    ALLOW_SYSCALL(sendto),
+    ALLOW_SYSCALL(close),
+
+    ALLOW_SYSCALL(rt_sigreturn),
+    ALLOW_SYSCALL(exit_group),
+    /* Add more syscalls here as needed - see audit logs from kernel */
+    { -1, NULL } /* end */
+};
+
+#undef ALLOW_SYSCALL
+
+static int enable_seccomp(void) {
+    scmp_filter_ctx ctx;
+    const struct syscall_info *syscall;
+
+    // Initialize seccomp in whitelist mode - deny all by default
+    ctx = seccomp_init(SCMP_ACT_KILL_PROCESS);
+    if (!ctx) {
+        syslog(LOG_ERR, "Failed to initialize seccomp");
+        return -1;
+    }
+
+    // Add rules for each allowed syscall
+    for (syscall = allowed_syscalls; syscall->num != -1; syscall++) {
+        if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, syscall->num, 0) < 0) {
+            syslog(LOG_ERR, "Failed to add %s rule", syscall->name);
+            seccomp_release(ctx);
+            return -1;
+        }
+    }
+
+    // Load the rules
+    if (seccomp_load(ctx) < 0) {
+        syslog(LOG_ERR, "Failed to load seccomp rules");
+        seccomp_release(ctx);
+        return -1;
+    }
+
+    seccomp_release(ctx);
+    return 0;
+}
+#endif
+
 int
 main(int argc, char **argv)
 {
@@ -2777,6 +2843,16 @@ main(int argc, char **argv)
 
 	if (context != NULL)
 		do_setcon(context);
+
+#ifdef HAVE_SECCOMP
+	tzset(); /* freeze timezone - to disable lookups to /etc/localtime at runtime */
+
+	if (enable_seccomp() < 0) {
+		syslog(LOG_ERR, "Failed to enable seccomp");
+		exit(1);
+	}
+	syslog(LOG_INFO, "seccomp enabled");
+#endif
 
 	syslog(LOG_INFO, "started, listening on port %d", port);
 
