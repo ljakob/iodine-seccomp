@@ -2428,6 +2428,9 @@ static const struct syscall_info allowed_syscalls[] = {
     ALLOW_SYSCALL(sendto),
     ALLOW_SYSCALL(close),
 
+    /* secure_random() for login seeds/nonces */
+    ALLOW_SYSCALL(getrandom),
+
     ALLOW_SYSCALL(rt_sigreturn),
     ALLOW_SYSCALL(exit_group),
     /* Add more syscalls here as needed - see audit logs from kernel */
