@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2006-2014 Erik Ekman <yarrick@kryo.se>,
- * 2006-2009 Bjorn Andersson <flex@kryo.se>
+ * Copyright (c) 2025 Leif Jakob <jakob@weite-welt.com>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,26 +14,13 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef __TEST_H__
-#define __TEST_H__
+#ifndef __SANDBOX_H__
+#define __SANDBOX_H__
 
-TCase *test_base32_create_tests(void);
-TCase *test_base64_create_tests(void);
-TCase *test_common_create_tests(void);
-TCase *test_dns_create_tests(void);
-TCase *test_encoding_create_tests(void);
-TCase *test_read_create_tests(void);
-TCase *test_login_create_tests(void);
-TCase *test_user_create_tests(void);
-TCase *test_fw_query_create_tests(void);
-TCase *test_sandbox_create_tests(void);
-
-char *va_str(const char *, ...);
-
-#if (CHECK_MAJOR_VERSION == 0 && \
-	((CHECK_MINOR_VERSION == 9 && CHECK_MICRO_VERSION < 2) || \
-	 (CHECK_MINOR_VERSION < 9)))
-#define tcase_set_timeout(...)
+#ifdef HAVE_SECCOMP
+/* Restrict iodined to the syscalls needed once the tunnel is running.
+   Returns 0 on success, -1 on error. */
+int enable_seccomp(void);
 #endif
 
 #endif

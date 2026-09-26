@@ -56,6 +56,7 @@
 #include "tun.h"
 #include "fw_query.h"
 #include "version.h"
+#include "sandbox.h"
 
 #ifdef HAVE_SYSTEMD
 # include <systemd/sd-daemon.h>
@@ -2404,72 +2405,6 @@ static void prepare_dns_fd(int fd)
 
 #endif
 }
-
-#ifdef HAVE_SECCOMP
-#include <seccomp.h>
-
-/* Define macro to create syscall rules */
-#define ALLOW_SYSCALL(name) { SCMP_SYS(name), #name }
-
-/* Structure to hold syscall info */
-struct syscall_info {
-    int num;
-    const char *name;
-};
-
-/* Array of allowed syscalls */
-static const struct syscall_info allowed_syscalls[] = {
-    ALLOW_SYSCALL(brk),
-
-    ALLOW_SYSCALL(pselect6),
-    ALLOW_SYSCALL(read),
-    ALLOW_SYSCALL(recvmsg),
-    ALLOW_SYSCALL(write),
-    ALLOW_SYSCALL(sendto),
-    ALLOW_SYSCALL(close),
-
-    /* secure_random() for login seeds/nonces */
-    ALLOW_SYSCALL(getrandom),
-
-    ALLOW_SYSCALL(rt_sigreturn),
-    ALLOW_SYSCALL(exit_group),
-    /* Add more syscalls here as needed - see audit logs from kernel */
-    { -1, NULL } /* end */
-};
-
-#undef ALLOW_SYSCALL
-
-static int enable_seccomp(void) {
-    scmp_filter_ctx ctx;
-    const struct syscall_info *syscall;
-
-    // Initialize seccomp in whitelist mode - deny all by default
-    ctx = seccomp_init(SCMP_ACT_KILL_PROCESS);
-    if (!ctx) {
-        syslog(LOG_ERR, "Failed to initialize seccomp");
-        return -1;
-    }
-
-    // Add rules for each allowed syscall
-    for (syscall = allowed_syscalls; syscall->num != -1; syscall++) {
-        if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, syscall->num, 0) < 0) {
-            syslog(LOG_ERR, "Failed to add %s rule", syscall->name);
-            seccomp_release(ctx);
-            return -1;
-        }
-    }
-
-    // Load the rules
-    if (seccomp_load(ctx) < 0) {
-        syslog(LOG_ERR, "Failed to load seccomp rules");
-        seccomp_release(ctx);
-        return -1;
-    }
-
-    seccomp_release(ctx);
-    return 0;
-}
-#endif
 
 int
 main(int argc, char **argv)
