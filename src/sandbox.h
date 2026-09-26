@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2006-2014 Erik Ekman <yarrick@kryo.se>,
- * 2006-2009 Bjorn Andersson <flex@kryo.se>
+ * Copyright (c) 2025 Leif Jakob <jakob@weite-welt.com>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,24 +14,13 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef __DNS_H__
-#define __DNS_H__
+#ifndef __SANDBOX_H__
+#define __SANDBOX_H__
 
-#include "common.h"
+#ifdef HAVE_SECCOMP
+/* Restrict iodined to the syscalls needed once the tunnel is running.
+   Returns 0 on success, -1 on error. */
+int enable_seccomp(void);
+#endif
 
-typedef enum {
-	QR_QUERY = 0,
-	QR_ANSWER = 1
-} qr_t;
-
-extern int dnsc_use_edns0;
-
-int dns_encode(char *, size_t, struct query *, qr_t, const char *, size_t);
-int dns_encode_ns_response(char *buf, size_t buflen, struct query *q,
-			   char *topdomain);
-int dns_encode_a_response(char *buf, size_t buflen, struct query *q);
-int dns_encode_nxdomain(char *buf, size_t buflen, struct query *q, const char *zone);
-unsigned short dns_get_id(char *packet, size_t packetlen);
-int dns_decode(char *, size_t, struct query *, qr_t, char *, size_t);
-
-#endif /* _DNS_H_ */
+#endif

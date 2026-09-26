@@ -56,6 +56,7 @@
 #include "tun.h"
 #include "fw_query.h"
 #include "version.h"
+#include "sandbox.h"
 
 #ifdef HAVE_SYSTEMD
 # include <systemd/sd-daemon.h>
@@ -150,7 +151,11 @@ get_external_ip(struct in_addr *ip)
 		struct timeval tv;
 
 		if (attempt) fprintf(stderr, "Retrying external IP lookup\n");
-		query.id = rand();
+		{
+			uint16_t rid;
+			secure_random(&rid, sizeof(rid));
+			query.id = rid;
+		}
 		buflen = sizeof(buf);
 		buflen = dns_encode(buf, buflen, &query, QR_QUERY, target, strlen(target));
 		if (buflen < 0) continue;
@@ -373,12 +378,12 @@ static void save_to_dnscache(int userid, struct query *q, char *answer, int answ
 {
 	int fill;
 
-	if (answerlen > sizeof(users[userid].dnscache_answer[fill]))
-		return;  /* can't store this */
-
 	fill = users[userid].dnscache_lastfilled + 1;
 	if (fill >= DNSCACHE_LEN)
 		fill = 0;
+
+	if (answerlen > sizeof(users[userid].dnscache_answer[fill]))
+		return;  /* can't store this */
 
 	memcpy(&(users[userid].dnscache_q[fill]), q, sizeof(struct query));
 	memcpy(users[userid].dnscache_answer[fill], answer, answerlen);
@@ -802,7 +807,16 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 			if (userid >= 0) {
 				int i;
 
-				users[userid].seed = rand();
+				{
+					int newseed;
+					/* CSPRNG seed: the login challenge is
+					   MD5(password XOR seed), so the seed
+					   must not be predictable from server
+					   start time (rand() after
+					   srand(time(NULL)) was). */
+					secure_random(&newseed, sizeof(newseed));
+					users[userid].seed = newseed;
+				}
 				/* Store remote IP number */
 				memcpy(&(users[userid].host), &(q->from), q->fromlen);
 				users[userid].hostlen = q->fromlen;
@@ -1134,7 +1148,9 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 		} else {
 			char buf[2048];
 			int i;
-			unsigned int v = ((unsigned int) rand()) & 0xff ;
+			unsigned int v;
+			secure_random(&v, sizeof(v));
+			v &= 0xff;
 
 			memset(buf, 0, sizeof(buf));
 			buf[0] = (req_frag_size >> 8) & 0xff;
@@ -1601,6 +1617,27 @@ handle_a_request(int dns_fd, struct query *q, int fakeip)
 }
 
 static void
+handle_underscore_request(int dns_fd, struct query *q, const char *topdomain)
+{
+	char buf[64*1024];
+	int len;
+
+	len = dns_encode_nxdomain(buf, sizeof(buf), q, topdomain);
+	if (len < 1) {
+		warnx("dns_encode_nxdomain doesn't fit");
+		return;
+	}
+
+	if (debug >= 2) {
+		fprintf(stderr, "TX: client %s, type %d, name %s, %d bytes NXDOMAIN reply\n",
+			format_addr(&q->from, q->fromlen), q->type, q->name, len);
+	}
+	if (sendto(dns_fd, buf, len, 0, (struct sockaddr*)&q->from, q->fromlen) <= 0) {
+		warn("nxdomain reply send error");
+	}
+}
+
+static void
 forward_query(int bind_fd, struct query *q)
 {
 	char buf[64*1024];
@@ -1719,6 +1756,18 @@ tunnel_dns(int tun_fd, int dns_fd, struct dnsfd *dns_fds, int bind_fd)
 		    (q.name[2] == 'w' || q.name[2] == 'W') &&
 		     q.name[3] == '.') {
 			handle_a_request(dns_fd, &q, 1);
+			return 0;
+		}
+
+		/* Handle A-type query for _.***.topdomain. It happens when
+		 *
+		 * https://datatracker.ietf.org/doc/html/rfc7816 (qname minimisation)
+		 * https://github.com/isc-projects/bind9/commit/ae52c2117eba9fa0778125f4e10834d673ab811b
+		 * */
+		if (q.type == T_A &&
+		    (q.name[0] == '_') &&
+		     q.name[1] == '.') {
+			handle_underscore_request(dns_fd, &q, topdomain);
 			return 0;
 		}
 
@@ -2357,69 +2406,6 @@ static void prepare_dns_fd(int fd)
 #endif
 }
 
-#ifdef HAVE_SECCOMP
-#include <seccomp.h>
-
-/* Define macro to create syscall rules */
-#define ALLOW_SYSCALL(name) { SCMP_SYS(name), #name }
-
-/* Structure to hold syscall info */
-struct syscall_info {
-    int num;
-    const char *name;
-};
-
-/* Array of allowed syscalls */
-static const struct syscall_info allowed_syscalls[] = {
-    ALLOW_SYSCALL(brk),
-
-    ALLOW_SYSCALL(pselect6),
-    ALLOW_SYSCALL(read),
-    ALLOW_SYSCALL(recvmsg),
-    ALLOW_SYSCALL(write),
-    ALLOW_SYSCALL(sendto),
-    ALLOW_SYSCALL(close),
-
-    ALLOW_SYSCALL(rt_sigreturn),
-    ALLOW_SYSCALL(exit_group),
-    /* Add more syscalls here as needed - see audit logs from kernel */
-    { -1, NULL } /* end */
-};
-
-#undef ALLOW_SYSCALL
-
-static int enable_seccomp(void) {
-    scmp_filter_ctx ctx;
-    const struct syscall_info *syscall;
-
-    // Initialize seccomp in whitelist mode - deny all by default
-    ctx = seccomp_init(SCMP_ACT_KILL_PROCESS);
-    if (!ctx) {
-        syslog(LOG_ERR, "Failed to initialize seccomp");
-        return -1;
-    }
-
-    // Add rules for each allowed syscall
-    for (syscall = allowed_syscalls; syscall->num != -1; syscall++) {
-        if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, syscall->num, 0) < 0) {
-            syslog(LOG_ERR, "Failed to add %s rule", syscall->name);
-            seccomp_release(ctx);
-            return -1;
-        }
-    }
-
-    // Load the rules
-    if (seccomp_load(ctx) < 0) {
-        syslog(LOG_ERR, "Failed to load seccomp rules");
-        seccomp_release(ctx);
-        return -1;
-    }
-
-    seccomp_release(ctx);
-    return 0;
-}
-#endif
-
 int
 main(int argc, char **argv)
 {
@@ -2499,7 +2485,6 @@ main(int argc, char **argv)
 		__progname++;
 #endif
 
-	srand(time(NULL));
 	fw_query_init();
 
 	while ((choice = getopt(argc, argv, "46vcsfhDu:t:d:m:l:L:p:n:b:P:z:F:i:")) != -1) {

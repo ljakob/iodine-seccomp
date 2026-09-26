@@ -60,6 +60,9 @@ main(void)
  	test = test_fw_query_create_tests();
 	suite_add_tcase(iodine, test);
 
+	test = test_sandbox_create_tests();
+	suite_add_tcase(iodine, test);
+
 	runner = srunner_create(iodine);
 	srunner_run_all(runner, CK_NORMAL);
 	failed = srunner_ntests_failed(runner);
