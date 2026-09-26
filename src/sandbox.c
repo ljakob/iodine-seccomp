@@ -15,11 +15,11 @@
  */
 
 #include <stddef.h>
-#include <syslog.h>
 
 #include "sandbox.h"
 
 #ifdef HAVE_SECCOMP
+#include <syslog.h>
 #include <seccomp.h>
 
 /* Define macro to create syscall rules */
